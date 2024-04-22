@@ -11,16 +11,19 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/vegaprotocol/pyth-service-monitor/clients/docker"
+	"github.com/vegaprotocol/pyth-service-monitor/config"
+	"github.com/vegaprotocol/pyth-service-monitor/internal/tools"
 	"go.uber.org/zap"
 )
 
 type FailureOnType string
 
 const (
-	StdoutFailure               FailureOnType = "stdout"
-	StderrFailure               FailureOnType = "stderr"
-	ProcessWatcherFailure       FailureOnType = "process-watcher"
-	ProcessWatcherInternalError FailureOnType = "process-watcher-internal-error"
+	LogWatcherSubscriptionFailure FailureOnType = "log-watcher-subscription-failure"
+	StdoutFailure                 FailureOnType = "stdout"
+	StderrFailure                 FailureOnType = "stderr"
+	ProcessWatcherFailure         FailureOnType = "process-watcher"
+	ProcessWatcherInternalError   FailureOnType = "process-watcher-internal-error"
 )
 
 const (
@@ -28,17 +31,18 @@ const (
 )
 
 var (
-	// Used for flags.
-	logsStreamCommand []string
-	stopCommand       []string
-	startCommand      []string
-	pythContainerName string
+	configFilePath string
 
 	rootCmd = &cobra.Command{
 		Use:   "pyth-service-monitor",
 		Short: "A command used to analyze and restart pyth-price-pusher",
 		Run: func(cmd *cobra.Command, args []string) {
-			if err := execute(); err != nil {
+			config, err := config.ReadFromFile(configFilePath)
+			if err != nil {
+				panic(err)
+			}
+
+			if err := execute(config); err != nil {
 				panic(err)
 			}
 		},
@@ -46,42 +50,18 @@ var (
 )
 
 func init() {
-	rootCmd.PersistentFlags().StringSliceVarP(
-		&logsStreamCommand,
-		"logs-stream-command",
-		"l",
-		[]string{"journalctl", "-u", "pyth-price-pusher-primary", "-f"},
-		"Command used to stream logs for the pyth price pusher",
-	)
-	rootCmd.PersistentFlags().StringSliceVarP(
-		&stopCommand,
-		"stop-command",
-		"s",
-		[]string{"systemctl", "stop", "pyth-price-pusher-primary"},
-		"Command used to stop service if any failure detected",
-	)
-	rootCmd.PersistentFlags().StringSliceVarP(
-		&startCommand,
-		"start-command",
-		"r",
-		[]string{"systemctl", "start", "pyth-price-pusher-primary"},
-		"Command used to start service if any failure detected",
-	)
 	rootCmd.PersistentFlags().StringVarP(
-		&pythContainerName,
-		"docker-container-name",
-		"n",
-		"pyth-price-pusher-primary",
-		"Name of the docker container which runs pyth",
+		&configFilePath,
+		"config-path",
+		"c",
+		"./config.toml",
+		"Path to the config file",
 	)
-
 }
 
 type LogStreamWatcher struct {
-	cmd *exec.Cmd
+	cmd []string
 
-	stdErr          io.ReadCloser
-	stdOut          io.ReadCloser
 	failureNotifier chan<- FailureOnType
 }
 
@@ -89,69 +69,92 @@ func NewLogStreamWatcher(logsStreamCommand []string, notifier chan<- FailureOnTy
 	if len(logsStreamCommand) < 1 {
 		return nil, fmt.Errorf("invalid command for -logs-stream-command")
 	}
-	cmd := exec.Command(logsStreamCommand[0], logsStreamCommand[1:]...)
-
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create std error pipe for the service log stream: %w", err)
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create std out pipe for the service log stream: %w", err)
-	}
 
 	return &LogStreamWatcher{
-		cmd:             cmd,
-		stdErr:          stderr,
-		stdOut:          stdout,
+		cmd:             logsStreamCommand,
 		failureNotifier: notifier,
 	}, nil
 }
 
-func (lsp *LogStreamWatcher) Wait() error {
-	return lsp.cmd.Wait()
-}
-
-func (lsp *LogStreamWatcher) Start(logger *zap.Logger, ctx context.Context, logLineAnalyzer func(string) bool) error {
-	if err := lsp.cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start log stream process command: %w", err)
-	}
-
-	go func(reader io.ReadCloser) {
-		logger.Sugar().Infof("Starting stderr logs watcher for pyth")
-
-		scanner := bufio.NewScanner(reader)
-		scanner.Split(bufio.ScanLines)
-		for scanner.Scan() {
-			m := scanner.Text()
-			if logLineAnalyzer(m) {
-				logger.Sugar().Infof("Found error in line: \"%s\"", m)
-				lsp.failureNotifier <- StderrFailure
-			}
-		}
-		if err := reader.Close(); err != nil {
-			logger.Error("Cannot close stderr", zap.Error(err))
-		}
-	}(lsp.stdErr)
-
-	go func(reader io.ReadCloser) {
-		logger.Sugar().Infof("Starting stdout logs watcher for pyth")
-
-		scanner := bufio.NewScanner(reader)
-		scanner.Split(bufio.ScanLines)
-		for scanner.Scan() {
-			m := scanner.Text()
-			if logLineAnalyzer(m) {
-				logger.Sugar().Infof("Found error in line: \"%s\"", m)
-				lsp.failureNotifier <- StdoutFailure
-			}
-		}
-		if err := reader.Close(); err != nil {
-			logger.Error("Cannot close stdout", zap.Error(err))
-		}
-	}(lsp.stdOut)
+func (lsw *LogStreamWatcher) Start(
+	ctx context.Context,
+	logger *zap.Logger,
+	logLineAnalyzer func(string) bool,
+) error {
+	go lsw.runForever(ctx, logger, logLineAnalyzer)
 
 	return nil
+}
+
+func (lsw *LogStreamWatcher) runForever(
+	ctx context.Context,
+	logger *zap.Logger,
+	logLineAnalyzer func(string) bool,
+) {
+	for {
+		// Do not try to subscribe to the logs immediately. Just wait a sec
+		time.Sleep(10 * time.Second)
+
+		cmd := exec.CommandContext(ctx, lsw.cmd[0], lsw.cmd[1:]...)
+
+		stderr, err := cmd.StderrPipe()
+		if err != nil {
+			logger.Error("failed to create std error pipe for the service log stream: %w", zap.Error(err))
+			lsw.failureNotifier <- LogWatcherSubscriptionFailure
+			continue
+		}
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			logger.Error("failed to create std out pipe for the service log stream", zap.Error(err))
+			lsw.failureNotifier <- LogWatcherSubscriptionFailure
+			continue
+		}
+
+		if err := cmd.Start(); err != nil {
+			logger.Error("failed to start log stream process command", zap.Error(err))
+			lsw.failureNotifier <- LogWatcherSubscriptionFailure
+			continue
+		}
+
+		go func(reader io.ReadCloser) {
+			logger.Sugar().Infof("Starting stderr logs watcher for pyth")
+
+			scanner := bufio.NewScanner(reader)
+			scanner.Split(bufio.ScanLines)
+			for scanner.Scan() {
+				m := scanner.Text()
+				if logLineAnalyzer(m) {
+					logger.Sugar().Infof("Found error in line: \"%s\"", m)
+					lsw.failureNotifier <- StderrFailure
+				}
+			}
+			if err := reader.Close(); err != nil {
+				logger.Error("Cannot close stderr", zap.Error(err))
+			}
+		}(stderr)
+
+		go func(reader io.ReadCloser) {
+			logger.Sugar().Infof("Starting stdout logs watcher for pyth")
+
+			scanner := bufio.NewScanner(reader)
+			scanner.Split(bufio.ScanLines)
+			for scanner.Scan() {
+				m := scanner.Text()
+				if logLineAnalyzer(m) {
+					logger.Sugar().Infof("Found error in line: \"%s\"", m)
+					lsw.failureNotifier <- StdoutFailure
+				}
+			}
+			if err := reader.Close(); err != nil {
+				logger.Error("Cannot close stdout", zap.Error(err))
+			}
+		}(stdout)
+
+		if err := cmd.Wait(); err != nil {
+			logger.Warn("Error on waiting for the log watcher", zap.Error(err))
+			lsw.failureNotifier <- LogWatcherSubscriptionFailure
+		}
+	}
 }
 
 func failureLineAnalyzer(logLine string) bool {
@@ -179,14 +182,19 @@ func NewProcessWatcher(notifier chan<- FailureOnType) (*ProcessWatcher, error) {
 	}, nil
 }
 
-func (pw *ProcessWatcher) StartForDocker(ctx context.Context, logger *zap.Logger, containerName string) error {
-	// Only docker supported for now...
-	dockerCli, err := docker.New()
-	if err != nil {
-		return fmt.Errorf("failed to create docker client: %w", err)
-	}
+func (pw *ProcessWatcher) Start(ctx context.Context, logger *zap.Logger, config *config.ProcessWatcher) error {
+	if config.Docker.Enabled {
+		// Only docker supported for now...
+		dockerCli, err := docker.New()
+		if err != nil {
+			return fmt.Errorf("failed to create docker client: %w", err)
+		}
 
-	go pw.monitorDockerContainer(dockerCli, ctx, logger, containerName)
+		go pw.monitorDockerContainer(dockerCli, ctx, logger, config.Docker.ContainerName)
+	} else {
+		// Only docker is supported for now
+		return fmt.Errorf("only docker process manager is supported")
+	}
 
 	return nil
 }
@@ -262,6 +270,14 @@ func NewPythServiceManager(
 	stopArgs []string,
 	startArgs []string,
 ) (*PythServiceManager, error) {
+	if len(stopArgs) < 1 {
+		return nil, fmt.Errorf("the stop command cannot be empty")
+	}
+
+	if len(startArgs) < 1 {
+		return nil, fmt.Errorf("the start command cannot be empty")
+	}
+
 	return &PythServiceManager{
 		failureNotifier: failureNotifier,
 		stopArgs:        stopArgs,
@@ -270,7 +286,8 @@ func NewPythServiceManager(
 }
 
 func (psm *PythServiceManager) Start(ctx context.Context, logger *zap.Logger) error {
-	// lastRestart := time.Now().Add(time.Duration(-60) * time.Minute)
+	// Make sure we will be able to restart service immediately when even from watcher is present
+	lastRestart := time.Now().Add(time.Duration(-2*RestartEverySeconds) * time.Minute)
 
 	for {
 		select {
@@ -289,13 +306,40 @@ func (psm *PythServiceManager) Start(ctx context.Context, logger *zap.Logger) er
 				logger.Sugar().Warnf("Received internal error from the process watcher")
 			}
 
-			// nextAllowedDuration := time.Now().Add(RestartEverySeconds * time.Second)
+			nextAllowedDuration := lastRestart.Add(RestartEverySeconds * time.Second)
+			if time.Now().Before(nextAllowedDuration) {
+				// ignore this event. We will wait for next one as restarting may be in progress
+				continue
+			}
 
+			logger.Info("Stopping pyth service")
+			lastRestart = time.Now()
+			err := tools.RetryRun(3, 5*time.Second, func() error {
+				_, err := tools.ExecuteBinary(psm.stopArgs[0], psm.stopArgs[1:], nil)
+
+				return err
+			})
+
+			// We do not care about errors here, just warning
+			if err != nil {
+				logger.Warn("failed to stop pyth service", zap.Error(err))
+			}
+
+			logger.Info("Starting pyth service")
+			err = tools.RetryRun(3, 5*time.Second, func() error {
+				_, err := tools.ExecuteBinary(psm.startArgs[0], psm.startArgs[1:], nil)
+
+				return err
+			})
+
+			if err != nil {
+				logger.Error("failed to start pyth service", zap.Error(err))
+			}
 		}
 	}
 }
 
-func execute() error {
+func execute(config *config.Config) error {
 	programContext, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -307,11 +351,11 @@ func execute() error {
 
 	failureNotifier := make(chan FailureOnType)
 
-	logStreamWatcher, err := NewLogStreamWatcher(logsStreamCommand, failureNotifier)
+	logStreamWatcher, err := NewLogStreamWatcher(config.Commands.LogStream, failureNotifier)
 	if err != nil {
 		return fmt.Errorf("failed to create new log stream process: %w", err)
 	}
-	if err := logStreamWatcher.Start(logger, programContext, failureLineAnalyzer); err != nil {
+	if err := logStreamWatcher.Start(programContext, logger, failureLineAnalyzer); err != nil {
 		return fmt.Errorf("failed to start log stream process")
 	}
 
@@ -320,22 +364,21 @@ func execute() error {
 		return fmt.Errorf("failed to create process watcher: %w", err)
 	}
 
-	if pythContainerName != "" {
-		if err := processWatcher.StartForDocker(
-			programContext,
-			logger.Named("docker-process-watcher"),
-			pythContainerName,
-		); err != nil {
-			return fmt.Errorf("failed to start process watcher for docker: %w", err)
-		}
-	} else {
-		// Only docker is supported for now
-		return fmt.Errorf("only docker process manager is supported")
+	if err := processWatcher.Start(programContext, logger.Named("process-watcher"), &config.ProcessWatcher); err != nil {
+		return fmt.Errorf("failed to start process watcher: %w", err)
 	}
 
-	logStreamWatcher.Wait() // Wait as long as stream is available
-	cancel()                // stop other processes
+	pythServiceManager, err := NewPythServiceManager(
+		failureNotifier,
+		config.Commands.Stop,
+		config.Commands.Start,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create pyth service manager")
+	}
+	pythServiceManager.Start(programContext, logger.Named("pyth-service-manager"))
 
+	<-programContext.Done()
 	return nil
 }
 

@@ -1,0 +1,26 @@
+[commands]
+    log-stream = [
+        "docker", "logs", "pyth-price-pusher",
+        "-n", "1",
+        "-f",
+    ]
+    stop = ["bash", "-c", "docker stop pyth-price-pusher && docker rm pyth-price-pusher"]
+    start = [
+        "docker", "run",
+        "--name", "pyth-price-pusher",
+        "-v", "/.config:/config",
+        "public.ecr.aws/pyth-network/xc-price-pusher:v6.6.0",
+        "--",
+        "evm",
+        "--endpoint", "https://rpc.ankr.com/gnosis/XXXXXXXXXXX",
+        "--mnemonic-file", "/config/mnemonic",
+        "--pyth-contract-address", "0x2880aB155794e7179c9eE2e38200202908C17B43",
+        "--price-service-endpoint", "https://hermes.pyth.network",
+        "--price-config-file", "/config/price-config.yaml",
+        "--polling-frequency", "5",
+    ]
+
+[process-watcher]
+    [process-watcher.docker]
+        enabled = true
+        container-name = "pyth-price-pusher"

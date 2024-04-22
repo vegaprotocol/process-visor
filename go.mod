@@ -4,6 +4,7 @@ go 1.21.6
 
 require (
 	github.com/docker/docker v26.0.2+incompatible
+	github.com/pelletier/go-toml/v2 v2.2.1
 	github.com/spf13/cobra v1.8.0
 	go.uber.org/zap v1.27.0
 )

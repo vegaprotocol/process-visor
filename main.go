@@ -15,7 +15,7 @@ var (
 
 	rootCmd = &cobra.Command{
 		Use:   "process-visor",
-		Short: "A command used to analyze and restart pyth-price-pusher",
+		Short: "A command used to supervise service",
 		Run: func(cmd *cobra.Command, args []string) {
 			config, err := config.ReadFromFile(configFilePath)
 			if err != nil {
@@ -47,7 +47,11 @@ func execute(config *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to create logger: %w", err)
 	}
-	defer logger.Sync()
+	defer func() {
+		if err := logger.Sync(); err != nil {
+			fmt.Printf("failed to sync logger buffer: %s", err.Error())
+		}
+	}()
 
 	failureNotifier := make(chan service.ServiceFailureType)
 
@@ -70,20 +74,24 @@ func execute(config *config.Config) error {
 		return fmt.Errorf("failed to start process watcher: %w", err)
 	}
 
-	ServiceManager, err := service.NewServiceManager(
+	serviceManager, err := service.NewServiceManager(
 		failureNotifier,
 		config.Commands.Stop,
 		config.Commands.Start,
 	)
 	if err != nil {
-		return fmt.Errorf("failed to create pyth service manager")
+		return fmt.Errorf("failed to create service manager")
 	}
-	ServiceManager.Start(programContext, logger.Named("pyth-service-manager"))
+	if err := serviceManager.Start(programContext, logger.Named("service-manager")); err != nil {
+		return fmt.Errorf("failed to start service manager : %w", err)
+	}
 
 	<-programContext.Done()
 	return nil
 }
 
 func main() {
-	rootCmd.Execute()
+	if err := rootCmd.Execute(); err != nil {
+		panic(err)
+	}
 }

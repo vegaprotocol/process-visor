@@ -166,7 +166,7 @@ func (pw *ProcessWatcher) monitorDockerContainer(
 	ctx context.Context,
 	logger *zap.Logger,
 	containerName string,
-) error {
+) {
 	const checkPeriod = 15 * time.Second
 
 	logger.Sugar().Infof("Starting process watcher for docker container %s", containerName)
@@ -177,7 +177,6 @@ func (pw *ProcessWatcher) monitorDockerContainer(
 		select {
 		case <-ctx.Done():
 			logger.Info("Stopping process watcher")
-			return nil
 		case <-ticker.C:
 			logger.Debug("Process watcher tick")
 		}

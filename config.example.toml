@@ -24,3 +24,6 @@
     [process-watcher.docker]
         enabled = true
         container-name = "pyth-price-pusher"
+
+[logs-watcher]
+    failure-keywords = ["err", "failed", "throw err", "error"]

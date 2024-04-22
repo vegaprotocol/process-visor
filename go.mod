@@ -1,4 +1,4 @@
-module github.com/vegaprotocol/pyth-service-monitor
+module github.com/vegaprotocol/process-visor
 
 go 1.21.6
 

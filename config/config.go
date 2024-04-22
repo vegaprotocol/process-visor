@@ -5,7 +5,7 @@ import (
 	"os"
 
 	toml "github.com/pelletier/go-toml/v2"
-	"github.com/vegaprotocol/pyth-service-monitor/internal/tools"
+	"github.com/vegaprotocol/process-visor/internal/tools"
 )
 
 type Commands struct {
@@ -23,9 +23,14 @@ type ProcessWatcher struct {
 	Docker DockerProcessWatcher `toml:"docker"`
 }
 
+type LogsWatcher struct {
+	FailureKeywords []string `toml:"failure-keywords"`
+}
+
 type Config struct {
 	Commands       Commands       `toml:"commands"`
 	ProcessWatcher ProcessWatcher `toml:"process-watcher"`
+	LogsWatcher    LogsWatcher    `toml:"logs-watcher"`
 }
 
 func DefaultConfig() Config {
@@ -60,6 +65,9 @@ func DefaultConfig() Config {
 				Enabled:       true,
 				ContainerName: "pyth-price-pusher",
 			},
+		},
+		LogsWatcher: LogsWatcher{
+			FailureKeywords: []string{"err", "failed", "throw err", "error"},
 		},
 	}
 }

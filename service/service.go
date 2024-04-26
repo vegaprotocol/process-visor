@@ -8,9 +8,9 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/vegaprotocol/process-visor/clients/docker"
-	"github.com/vegaprotocol/process-visor/config"
-	"github.com/vegaprotocol/process-visor/internal/tools"
+	"github.com/vegaprotocol/process-watcher/clients/docker"
+	"github.com/vegaprotocol/process-watcher/config"
+	"github.com/vegaprotocol/process-watcher/internal/tools"
 	"go.uber.org/zap"
 )
 

@@ -9,12 +9,12 @@ To get started with the Sidecar Service, follow these steps:
 1. Clone the Repository: Clone the repository to your local machine.
 
 ```
-git clone https://github.com/vegaprotocol/process-visor.git
+git clone https://github.com/vegaprotocol/process-watcher.git
 ```
 
 2. Build the binary
 ```
-go build -o ./process-visor . 
+go build -o ./process-watcher . 
 ```
 
 3. Copy example config and update it
@@ -26,7 +26,7 @@ cp config.example.toml config.toml
 4. Run the program
 
 ```
-./process-visor -c ./config.toml
+./process-watcher -c ./config.toml
 ```
 
 ## Configuration

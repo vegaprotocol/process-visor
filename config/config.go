@@ -5,7 +5,7 @@ import (
 	"os"
 
 	toml "github.com/pelletier/go-toml/v2"
-	"github.com/vegaprotocol/process-visor/internal/tools"
+	"github.com/vegaprotocol/process-watcher/internal/tools"
 )
 
 type Commands struct {

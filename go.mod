@@ -1,4 +1,4 @@
-module github.com/vegaprotocol/process-visor
+module github.com/vegaprotocol/process-watcher
 
 go 1.21.6
 

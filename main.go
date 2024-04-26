@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"github.com/vegaprotocol/process-visor/config"
-	"github.com/vegaprotocol/process-visor/service"
+	"github.com/vegaprotocol/process-watcher/config"
+	"github.com/vegaprotocol/process-watcher/service"
 	"go.uber.org/zap"
 )
 
@@ -14,7 +14,7 @@ var (
 	configFilePath string
 
 	rootCmd = &cobra.Command{
-		Use:   "process-visor",
+		Use:   "process-watcher",
 		Short: "A command used to supervise service",
 		Run: func(cmd *cobra.Command, args []string) {
 			config, err := config.ReadFromFile(configFilePath)
